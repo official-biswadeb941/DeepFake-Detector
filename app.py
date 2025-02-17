@@ -98,36 +98,52 @@ print(f"Test Accuracy: {test_accuracy}")
 # Visualize the training and validation accuracy and loss
 fig, axs = plt.subplots(2, 2, figsize=(15, 10))
 
+# Get history data
+train_acc = history.history.get('accuracy', [])
+val_acc = history.history.get('val_accuracy', [])
+train_loss = history.history.get('loss', [])
+val_loss = history.history.get('val_loss', [])
+
 # Plot training accuracy
-axs[0, 0].plot(history.history['accuracy'], label='Training Accuracy')
+axs[0, 0].plot(train_acc, label='Training Accuracy', marker='o')
 axs[0, 0].set_title('Training Accuracy')
 axs[0, 0].set_xlabel('Epochs')
 axs[0, 0].set_ylabel('Accuracy')
 axs[0, 0].legend()
+axs[0, 0].grid()
 
 # Plot training loss
-axs[0, 1].plot(history.history['loss'], label='Training Loss', color='red')
+axs[0, 1].plot(train_loss, label='Training Loss', marker='o', color='red')
 axs[0, 1].set_title('Training Loss')
 axs[0, 1].set_xlabel('Epochs')
 axs[0, 1].set_ylabel('Loss')
 axs[0, 1].legend()
+axs[0, 1].grid()
 
-# Plot validation accuracy
-axs[1, 0].plot(history.history['val_accuracy'], label='Validation Accuracy', color='green')
-axs[1, 0].set_title('Validation Accuracy')
-axs[1, 0].set_xlabel('Epochs')
-axs[1, 0].set_ylabel('Accuracy')
-axs[1, 0].legend()
+# Plot validation accuracy (if available)
+if val_acc:
+    axs[1, 0].plot(val_acc, label='Validation Accuracy', marker='o', color='green')
+    axs[1, 0].set_title('Validation Accuracy')
+    axs[1, 0].set_xlabel('Epochs')
+    axs[1, 0].set_ylabel('Accuracy')
+    axs[1, 0].legend()
+    axs[1, 0].grid()
+else:
+    axs[1, 0].text(0.5, 0.5, 'No Validation Accuracy Data', fontsize=12, ha='center')
 
-# Plot validation loss
-axs[1, 1].plot(history.history['val_loss'], label='Validation Loss', color='orange')
-axs[1, 1].set_title('Validation Loss')
-axs[1, 1].set_xlabel('Epochs')
-axs[1, 1].set_ylabel('Loss')
-axs[1, 1].legend()
+# Plot validation loss (if available)
+if val_loss:
+    axs[1, 1].plot(val_loss, label='Validation Loss', marker='o', color='orange')
+    axs[1, 1].set_title('Validation Loss')
+    axs[1, 1].set_xlabel('Epochs')
+    axs[1, 1].set_ylabel('Loss')
+    axs[1, 1].legend()
+    axs[1, 1].grid()
+else:
+    axs[1, 1].text(0.5, 0.5, 'No Validation Loss Data', fontsize=12, ha='center')
 
 # Set the figure title
-plt.suptitle('DeepFake Detector', fontsize=16)
+plt.suptitle('DeepFake Detector Training Performance', fontsize=16)
 
 # Display the plots
 plt.tight_layout()
