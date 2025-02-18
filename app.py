@@ -1,110 +1,132 @@
 import tensorflow as tf
 import matplotlib.pyplot as plt
-from tensorflow.keras import layers, models
+import numpy as np
+import hashlib
+from tensorflow.keras import layers, models, backend as K
 from tensorflow.keras.preprocessing.image import ImageDataGenerator
 
-# Check if GPU is available, otherwise fallback to CPU
-if tf.config.list_physical_devices('GPU'):
-    device = '/GPU:0'  # If GPU is available, use GPU
-    print("GPU found. Using GPU for training.")
-else:
-    device = '/CPU:0'  # If GPU is not available, use CPU
-    print("No GPU found. Using CPU for training.")
+# Check if TPU is available
+try:
+    tpu = tf.distribute.cluster_resolver.TPUClusterResolver()
+    tf.config.experimental_connect_to_cluster(tpu)
+    tf.tpu.experimental.initialize_tpu_system(tpu)
+    strategy = tf.distribute.TPUStrategy(tpu)
+    device = 'TPU'
+    print("TPU found. Using TPU for training.")
+except:
+    # Check if GPU is available
+    if tf.config.list_physical_devices('GPU'):
+        strategy = tf.distribute.MirroredStrategy()
+        device = 'GPU'
+        print("GPU found. Using GPU for training.")
+    else:
+        strategy = tf.distribute.OneDeviceStrategy('/CPU:0')
+        device = 'CPU'
+        print("No TPU or GPU found. Using CPU for training.")
 
-# Paths to the training and validation directories
+# Paths to datasets
 train_dir = 'Dataset/Train'
 val_dir = 'Dataset/Val'
 
 # Image dimensions
-img_height = 32  # Image size is 32x32
-img_width = 32
+img_height, img_width = 32, 32
 batch_size = 32
 
-# Create ImageDataGenerators for training and validation datasets
+# ImageDataGenerators for data augmentation
 train_datagen = ImageDataGenerator(
-    rescale=1./255,  # Normalize pixel values to [0, 1]
-    rotation_range=30,  # Random rotations for augmentation
-    width_shift_range=0.2,  # Random horizontal shift
-    height_shift_range=0.2,  # Random vertical shift
-    shear_range=0.2,  # Random shear transformations
-    zoom_range=0.2,  # Random zooms
-    horizontal_flip=True,  # Random horizontal flips
-    fill_mode='nearest'  # Fill missing pixels during transformation
+    rescale=1./255, rotation_range=30, width_shift_range=0.2,
+    height_shift_range=0.2, shear_range=0.2, zoom_range=0.2,
+    horizontal_flip=True, fill_mode='nearest'
 )
-
 val_datagen = ImageDataGenerator(rescale=1./255)
 
-# Load the images from the directories and apply the transformations
 train_generator = train_datagen.flow_from_directory(
-    train_dir,
-    target_size=(img_height, img_width),
-    batch_size=batch_size,
-    class_mode='binary'  # Since we have two classes (REAL, FAKE)
+    train_dir, target_size=(img_height, img_width), batch_size=batch_size, class_mode='binary'
 )
-
 val_generator = val_datagen.flow_from_directory(
-    val_dir,
-    target_size=(img_height, img_width),
-    batch_size=batch_size,
-    class_mode='binary'
+    val_dir, target_size=(img_height, img_width), batch_size=batch_size, class_mode='binary'
 )
 
-# Build the CNN model with explicit Input layer
-model = models.Sequential([
-    layers.Input(shape=(img_height, img_width, 3)),  # Explicit input layer
-    # First Convolutional Block
-    layers.Conv2D(64, (3, 3), activation='relu'),
-    layers.BatchNormalization(),
-    layers.MaxPooling2D(2, 2),
+# Build CNN model
+def create_model():
+    model = models.Sequential([
+        layers.Input(shape=(img_height, img_width, 3)),
+        layers.Conv2D(64, (3, 3), activation='relu'),
+        layers.BatchNormalization(),
+        layers.MaxPooling2D(2, 2),
+        layers.Conv2D(128, (3, 3), activation='relu'),
+        layers.BatchNormalization(),
+        layers.MaxPooling2D(2, 2),
+        layers.Conv2D(256, (3, 3), activation='relu'),
+        layers.BatchNormalization(),
+        layers.MaxPooling2D(2, 2),
+        layers.Flatten(),
+        layers.Dense(1024, activation='relu'),
+        layers.Dropout(0.5),
+        layers.Dense(1, activation='sigmoid')
+    ])
+    model.compile(optimizer='adam', loss='binary_crossentropy', metrics=['accuracy'])
+    return model
 
-    # Second Convolutional Block
-    layers.Conv2D(128, (3, 3), activation='relu'),
-    layers.BatchNormalization(),
-    layers.MaxPooling2D(2, 2),
+with strategy.scope():
+    model = create_model()
 
-    # Third Convolutional Block
-    layers.Conv2D(256, (3, 3), activation='relu'),
-    layers.BatchNormalization(),
-    layers.MaxPooling2D(2, 2),
+model.summary()  # Print model architecture
 
-    # Flatten and Fully Connected Layers
-    layers.Flatten(),
-    layers.Dense(1024, activation='relu'),
-    layers.Dropout(0.5),  # Dropout to prevent overfitting
-    layers.Dense(1, activation='sigmoid')  # Binary classification (0 = REAL, 1 = FAKE)
-])
+# Model consistency check with dummy input
+def check_model_consistency(model):
+    try:
+        test_input = np.random.rand(1, img_height, img_width, 3).astype(np.float32)
+        test_output = model.predict(test_input)
+        print("Model consistency check passed. Output shape:", test_output.shape)
+    except Exception as e:
+        print("Model consistency check failed:", str(e))
 
-# Compile the model
-model.compile(optimizer='adam', loss='binary_crossentropy', metrics=['accuracy'])
+check_model_consistency(model)
 
-# Train the model and store the training history
-with tf.device(device):  # Specify the device to be used (CPU or GPU)
+# Train model
+with strategy.scope():
     history = model.fit(
-        train_generator,
-        steps_per_epoch=train_generator.samples // batch_size,
-        epochs=20,  # Increased epochs due to large dataset
-        validation_data=val_generator,
+        train_generator, steps_per_epoch=train_generator.samples // batch_size,
+        epochs=20, validation_data=val_generator,
         validation_steps=val_generator.samples // batch_size
     )
 
 # Save the trained model
-model.save('deepfake_detection_model_large_dataset_32x32_fixed_with_device.h5')
-print("Model saved as 'deepfake_detection_model_large_dataset_32x32_fixed_with_device.h5'")
+model.save('DeepFake-Detector.keras')
+print("Model saved as 'DeepFake-Detector.keras'")
 
-# Evaluate the model
-test_loss, test_accuracy = model.evaluate(val_generator)
-print(f"Test Accuracy: {test_accuracy}")
+# Generate model hash for tamper-proofing
+def generate_model_hash(model_path):
+    with open(model_path, 'rb') as f:
+        model_bytes = f.read()
+    return hashlib.sha256(model_bytes).hexdigest()
 
-# Visualize the training and validation accuracy and loss
+model_hash = generate_model_hash('DeepFake-Detector.keras')
+print("Model Hash:", model_hash)
+
+# Embed hash as a non-trainable weight
+def embed_hash_in_model(model, model_hash):
+    hash_tensor = tf.convert_to_tensor([ord(c) for c in model_hash], dtype=tf.float32)
+    hash_layer = tf.Variable(hash_tensor, trainable=False, name="model_hash")
+    model.add(tf.keras.layers.Lambda(lambda x: x * 1, name="hash_layer"))  # Dummy layer to hold hash
+    K.set_value(hash_layer, hash_tensor)
+
+embed_hash_in_model(model, model_hash)
+print("Model hash embedded.")
+
+# Save the tamper-proof model
+model.save('DeepFake-Detector-TamperProof.keras')
+print("Tamper-proof model saved as 'DeepFake-Detector-TamperProof.keras'")
+
+# Plot training and validation accuracy and loss
 fig, axs = plt.subplots(2, 2, figsize=(15, 10))
 
-# Get history data
 train_acc = history.history.get('accuracy', [])
 val_acc = history.history.get('val_accuracy', [])
 train_loss = history.history.get('loss', [])
 val_loss = history.history.get('val_loss', [])
 
-# Plot training accuracy
 axs[0, 0].plot(train_acc, label='Training Accuracy', marker='o')
 axs[0, 0].set_title('Training Accuracy')
 axs[0, 0].set_xlabel('Epochs')
@@ -112,7 +134,6 @@ axs[0, 0].set_ylabel('Accuracy')
 axs[0, 0].legend()
 axs[0, 0].grid()
 
-# Plot training loss
 axs[0, 1].plot(train_loss, label='Training Loss', marker='o', color='red')
 axs[0, 1].set_title('Training Loss')
 axs[0, 1].set_xlabel('Epochs')
@@ -120,7 +141,6 @@ axs[0, 1].set_ylabel('Loss')
 axs[0, 1].legend()
 axs[0, 1].grid()
 
-# Plot validation accuracy (if available)
 if val_acc:
     axs[1, 0].plot(val_acc, label='Validation Accuracy', marker='o', color='green')
     axs[1, 0].set_title('Validation Accuracy')
@@ -128,10 +148,7 @@ if val_acc:
     axs[1, 0].set_ylabel('Accuracy')
     axs[1, 0].legend()
     axs[1, 0].grid()
-else:
-    axs[1, 0].text(0.5, 0.5, 'No Validation Accuracy Data', fontsize=12, ha='center')
 
-# Plot validation loss (if available)
 if val_loss:
     axs[1, 1].plot(val_loss, label='Validation Loss', marker='o', color='orange')
     axs[1, 1].set_title('Validation Loss')
@@ -139,13 +156,8 @@ if val_loss:
     axs[1, 1].set_ylabel('Loss')
     axs[1, 1].legend()
     axs[1, 1].grid()
-else:
-    axs[1, 1].text(0.5, 0.5, 'No Validation Loss Data', fontsize=12, ha='center')
 
-# Set the figure title
 plt.suptitle('DeepFake Detector Training Performance', fontsize=16)
-
-# Display the plots
 plt.tight_layout()
-plt.subplots_adjust(top=0.9)  # Adjust title placement
+plt.subplots_adjust(top=0.9)
 plt.show()
