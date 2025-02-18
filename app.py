@@ -14,7 +14,6 @@ try:
     device = 'TPU'
     print("TPU found. Using TPU for training.")
 except:
-    # Check if GPU is available
     if tf.config.list_physical_devices('GPU'):
         strategy = tf.distribute.MirroredStrategy()
         device = 'GPU'
@@ -47,6 +46,14 @@ val_generator = val_datagen.flow_from_directory(
     val_dir, target_size=(img_height, img_width), batch_size=batch_size, class_mode='binary'
 )
 
+# Function to embed hash in model
+def embed_hash_in_model(model):
+    model_json = model.to_json().encode('utf-8')
+    model_hash = hashlib.sha256(model_json).hexdigest()
+    hash_tensor = tf.convert_to_tensor([ord(c) for c in model_hash], dtype=tf.float32)
+    model.add(tf.keras.layers.Lambda(lambda x: x * 1, name="hash_layer"))  # Dummy layer to hold hash
+    return model_hash
+
 # Build CNN model
 def create_model():
     model = models.Sequential([
@@ -70,50 +77,17 @@ def create_model():
 
 with strategy.scope():
     model = create_model()
+    model_hash = embed_hash_in_model(model)
 
 model.summary()  # Print model architecture
-
-# Model consistency check with dummy input
-def check_model_consistency(model):
-    try:
-        test_input = np.random.rand(1, img_height, img_width, 3).astype(np.float32)
-        test_output = model.predict(test_input)
-        print("Model consistency check passed. Output shape:", test_output.shape)
-    except Exception as e:
-        print("Model consistency check failed:", str(e))
-
-check_model_consistency(model)
-
-# Train model
-with strategy.scope():
-    history = model.fit(
-        train_generator, steps_per_epoch=train_generator.samples // batch_size,
-        epochs=20, validation_data=val_generator,
-        validation_steps=val_generator.samples // batch_size
-    )
-
-# Save the trained model
-model.save('DeepFake-Detector.keras')
-print("Model saved as 'DeepFake-Detector.keras'")
-
-# Generate model hash for tamper-proofing
-def generate_model_hash(model_path):
-    with open(model_path, 'rb') as f:
-        model_bytes = f.read()
-    return hashlib.sha256(model_bytes).hexdigest()
-
-model_hash = generate_model_hash('DeepFake-Detector.keras')
 print("Model Hash:", model_hash)
 
-# Embed hash as a non-trainable weight
-def embed_hash_in_model(model, model_hash):
-    hash_tensor = tf.convert_to_tensor([ord(c) for c in model_hash], dtype=tf.float32)
-    hash_layer = tf.Variable(hash_tensor, trainable=False, name="model_hash")
-    model.add(tf.keras.layers.Lambda(lambda x: x * 1, name="hash_layer"))  # Dummy layer to hold hash
-    K.set_value(hash_layer, hash_tensor)
-
-embed_hash_in_model(model, model_hash)
-print("Model hash embedded.")
+# Train model
+history = model.fit(
+    train_generator, steps_per_epoch=train_generator.samples // batch_size,
+    epochs=20, validation_data=val_generator,
+    validation_steps=val_generator.samples // batch_size
+)
 
 # Save the tamper-proof model
 model.save('DeepFake-Detector-TamperProof.keras')
@@ -121,7 +95,6 @@ print("Tamper-proof model saved as 'DeepFake-Detector-TamperProof.keras'")
 
 # Plot training and validation accuracy and loss
 fig, axs = plt.subplots(2, 2, figsize=(15, 10))
-
 train_acc = history.history.get('accuracy', [])
 val_acc = history.history.get('val_accuracy', [])
 train_loss = history.history.get('loss', [])
